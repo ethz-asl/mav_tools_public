@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<launch>
+  <arg name="mav_name" default="example"/>
+  <arg name="namespace" default="$(arg mav_name)" />
+
+  <!-- It is good practice to use a system namespace so that multiple MAVs can be flown on the same network -->
+  <group ns="$(arg namespace)" >
+
+  <!-- Autopilot interface -->
+  <node pkg="mavros" type="mavros_node" name="mavros" output="screen">
+    <rosparam command="load" file="$(find mav_startup)/parameters/mavs/$(arg mav_name)/px4_config.yaml" />
+  </node>
+
+  <!-- Our flir camera driver that uses the mavros trigger information, see the VI sensor page in the wiki for details -->
+  <node name="spinnaker_camera_node" pkg="spinnaker_camera_driver" type="camera_node" output="screen" >
+    <param name="force_mavros_triggering" value="true" />
+    <param name="imu_time_offset_s" value="0.02288926938" />
+    <param name="image_format_y_binning" value="2"/>
+    <remap from="/mavros/cam_imu_sync/cam_imu_stamp" to="/$(arg namespace)/mavros/cam_imu_sync/cam_imu_stamp"/>
+  </node>
+
+  <!-- Provides VI Odometry to the system -->
+  <node name="rovio" pkg="rovio" type="rovio_node" output="screen">
+    <param name="filter_config" value="$(find mav_startup)/parameters/mavs/$(arg mav_name)/rovio_filter.info" />
+    <param name="camera0_config" value="$(find mav_startup)/parameters/mavs/$(arg mav_name)/rovio_cam0.yaml" />
+    <remap from="cam0/image_raw" to="image_raw"/>
+    <remap from="imu0" to="mavros/imu/data_raw"/>
+  </node>
+  
+  <!-- Compensates for the lag rovio induces by integrating IMU data -->
+  <node pkg="odom_predictor" type="odom_predictor_node" name="odom_predictor" output="screen">
+    <remap from="odometry" to="rovio/odometry"/>
+    <remap from="imu_bias" to="rovio/imu_biases"/>
+    <remap from="imu" to="mavros/imu/data_raw"/>
+  </node>
+  
+  <!-- MPC converting trajectories into attitude and thrust commands -->
+  <node name="mav_nonlinear_mpc" pkg="mav_nonlinear_mpc" type="nonlinear_mpc_node" respawn="false" clear_params="true" output="screen">
+    <remap from="odometry" to="odom_predictor/predicted_odometry" />
+    <remap from="rc" to="mavros/rc/in" />
+    <rosparam file="$(find mav_startup)/parameters/mavs/$(arg mav_name)/nonlinear_mpc.yaml"/>
+    <rosparam file="$(find mav_startup)/parameters/mavs/$(arg mav_name)/disturbance_observer.yaml"/>
+    <param name="simulation" value="false"/>
+    <param name="autopilot_interface" value="mavros"/>
+    
+    <remap from="command/roll_pitch_yawrate_thrust" to="mavros/setpoint_raw/roll_pitch_yawrate_thrust"/>
+  </node>
+  
+  </group>
+</launch>
